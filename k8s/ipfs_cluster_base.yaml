@@ -191,18 +191,20 @@ spec:
     spec:
       accessModes:
       - ReadWriteOnce
-      persistentVolumeReclaimPolicy: Retain
+#      persistentVolumeReclaimPolicy: Retain
       resources:
         requests:
           storage: 5Gi
-      storageClassName: standard
+#      storageClassName: standard
+      storageClassName: awsElasticBlockStore
   - metadata:
       name: ipfs-storage
     spec:
       accessModes:
       - ReadWriteOnce
-      persistentVolumeReclaimPolicy: Retain
+#      persistentVolumeReclaimPolicy: Retain
       resources:
         requests:
           storage: 200Gi
-      storageClassName: standard
+#      storageClassName: standard
+      storageClassName: awsElasticBlockStore
