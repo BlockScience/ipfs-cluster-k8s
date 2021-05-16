@@ -1,0 +1,208 @@
+apiVersion: v1
+data: null
+kind: ConfigMap
+metadata:
+  name: env-config
+---
+apiVersion: v1
+data:
+  cluster-entrypoint.sh: |
+    #!/bin/sh
+    user=ipfs
+
+    # This is a custom entrypoint for k8s designed to connect to the bootstrap
+    # node running in the cluster. It has been set up using a configmap to
+    # allow changes on the fly.
+
+
+    if [ ! -f /data/ipfs-cluster/service.json ]; then
+      ipfs-cluster-service init
+    fi
+
+    PEER_HOSTNAME=`cat /proc/sys/kernel/hostname`
+
+    grep -q ".*ipfs-cluster-0.*" /proc/sys/kernel/hostname
+    if [ $? -eq 0 ]; then
+      CLUSTER_ID=${BOOTSTRAP_PEER_ID} \
+      CLUSTER_PRIVATEKEY=${BOOTSTRAP_PEER_PRIV_KEY} \
+      exec ipfs-cluster-service daemon --upgrade --leave
+    else
+      BOOTSTRAP_ADDR=/dns4/${SVC_NAME}-0.${SVC_NAME}/tcp/9096/ipfs/${BOOTSTRAP_PEER_ID}
+
+      if [ -z $BOOTSTRAP_ADDR ]; then
+        exit 1
+      fi
+      # Only ipfs user can get here
+      exec ipfs-cluster-service daemon --upgrade --bootstrap $BOOTSTRAP_ADDR --leave
+    fi
+  configure-ipfs.sh: |
+    #!/bin/sh
+    set -x
+    # This is a custom entrypoint for k8s designed to run ipfs nodes in an appropriate
+    # setup for production scenarios.
+
+    if [ -f /data/ipfs/repo.lock ]; then
+      rm /data/ipfs/repo.lock
+    fi
+
+    ipfs init --profile="server,badgerds"
+    ipfs config Datastore.StorageMax 180GB
+    ipfs config --json Swarm.ConnMgr.HighWater 2000
+    ipfs config --json Datastore.BloomFilterSize 1048576
+
+    chown -R ipfs /data/ipfs
+
+    exit 0
+kind: ConfigMap
+metadata:
+  name: ipfs-cluster-set-bootstrap-conf
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: ipfs-cluster
+  name: ipfs-cluster
+spec:
+  ports:
+  - name: swarm
+    port: 4001
+    targetPort: swarm
+  - name: cluster-swarm
+    port: 9096
+    targetPort: cluster-swarm
+  selector:
+    app: ipfs-cluster
+  type: LoadBalancer
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: ipfs-cluster
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: ipfs-cluster
+  serviceName: ipfs-cluster
+  template:
+    metadata:
+      labels:
+        app: ipfs-cluster
+    spec:
+      containers:
+      - env:
+        - name: IPFS_FD_MAX
+          value: "4096"
+        image: ipfs/go-ipfs:cluster-k8s
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          initialDelaySeconds: 30
+          periodSeconds: 15
+          tcpSocket:
+            port: swarm
+          timeoutSeconds: 5
+        name: ipfs
+        ports:
+        - containerPort: 4001
+          name: swarm
+          protocol: TCP
+        - containerPort: 4002
+          name: swarm-udp
+          protocol: UDP
+        - containerPort: 5001
+          name: api
+          protocol: TCP
+        - containerPort: 8081
+          name: ws
+          protocol: TCP
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        resources: {}
+        volumeMounts:
+        - mountPath: /data/ipfs
+          name: ipfs-storage
+        - mountPath: /custom
+          name: configure-script
+      - command:
+        - sh
+        - /custom/cluster-entrypoint.sh
+        env:
+        - name: BOOTSTRAP_PEER_PRIV_KEY
+          valueFrom:
+            secretKeyRef:
+              key: bootstrap-peer-priv-key
+              name: secret-config
+        - name: CLUSTER_SECRET
+          valueFrom:
+            secretKeyRef:
+              key: cluster-secret
+              name: secret-config
+        - name: CLUSTER_MONITOR_PING_INTERVAL
+          value: 3m
+        - name: SVC_NAME
+          value: ipfs-cluster
+        envFrom:
+        - configMapRef:
+            name: env-config
+        image: ipfs/ipfs-cluster:latest
+        livenessProbe:
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          tcpSocket:
+            port: cluster-swarm
+          timeoutSeconds: 5
+        name: ipfs-cluster
+        ports:
+        - containerPort: 9094
+          name: api-http
+          protocol: TCP
+        - containerPort: 9095
+          name: proxy-http
+          protocol: TCP
+        - containerPort: 9096
+          name: cluster-swarm
+          protocol: TCP
+        resources: {}
+        volumeMounts:
+        - mountPath: /data/ipfs-cluster
+          name: cluster-storage
+        - mountPath: /custom
+          name: configure-script
+      initContainers:
+      - command:
+        - sh
+        - /custom/configure-ipfs.sh
+        image: ipfs/go-ipfs:latest
+        name: configure-ipfs
+        volumeMounts:
+        - mountPath: /data/ipfs
+          name: ipfs-storage
+        - mountPath: /custom
+          name: configure-script
+      volumes:
+      - configMap:
+          name: ipfs-cluster-set-bootstrap-conf
+        name: configure-script
+  volumeClaimTemplates:
+  - metadata:
+      name: cluster-storage
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      persistentVolumeReclaimPolicy: Retain
+      resources:
+        requests:
+          storage: 5Gi
+      storageClassName: standard
+  - metadata:
+      name: ipfs-storage
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      persistentVolumeReclaimPolicy: Retain
+      resources:
+        requests:
+          storage: 200Gi
+      storageClassName: standard
