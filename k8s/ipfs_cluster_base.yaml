@@ -191,7 +191,7 @@ spec:
     spec:
       accessModes:
       - ReadWriteOnce
-#      persistentVolumeReclaimPolicy: Retain
+      persistentVolumeReclaimPolicy: Retain
       resources:
         requests:
           storage: 5Gi
@@ -201,7 +201,7 @@ spec:
     spec:
       accessModes:
       - ReadWriteOnce
-#      persistentVolumeReclaimPolicy: Retain
+      persistentVolumeReclaimPolicy: Retain
       resources:
         requests:
           storage: 200Gi
